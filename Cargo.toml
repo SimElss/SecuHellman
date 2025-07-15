@@ -1,0 +1,13 @@
+[package]
+name = "hellman_tmto"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "htmto"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5.40", features = ["derive", "string"] }
+rand = "0.9.1"
+sha2 = "0.10.9"
