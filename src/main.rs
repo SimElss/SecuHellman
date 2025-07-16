@@ -1,9 +1,10 @@
 use clap::Parser;
 use sha2::{Digest, Sha256};
-use core::hash;
-use std::path::{Path, PathBuf};
-use std::env;
-use rand::prelude::*;
+use std::path::{PathBuf};
+use std::{env, vec};
+use rand::{prelude::*};
+use std::fs::File;
+use std::io::Write;
 
 const MAX_DOMAIN:  u64 = 274877906943; // 2**38 - 1
 
@@ -39,18 +40,30 @@ fn default_table_path() -> PathBuf {
 
 fn main() {
     let args = Args::parse();
-    // Initialize random number generator
+    // Init random number generator
     let mut rng = rand::rng();
     let x0 = rng.random_range(0..MAX_DOMAIN);
-    let mut x0_list : Vec<u64> = Vec::new();
-    let mut x_end_list : Vec<u64> = Vec::new();
-    println!("Number of chains: {}", args.nchains);
 
+    // Init list
+    let mut x0_list : Vec<u64> = Vec::new();
+    let mut x_end_bis : Vec<u64> = Vec::new();
+    let mut x_end_list : Vec<u64> = Vec::new();
+    let mut n_reduc_list : Vec<u32> = Vec::new();
+
+    //Hellman Table algo
     for chain in 0..args.nchains {
+        //Store x0
         let x0_bis = (x0 + chain) % MAX_DOMAIN; 
         x0_list.push(x0_bis);
-        for column in 0..args.ncolumns {
-            // Hash the value using SHA256
+
+        // Random generator for the N Reduc
+        let mut rng_reduc = rand::rng();
+        let n_reduc: u32 = rng_reduc.random_range(1..=255);
+        n_reduc_list.push(n_reduc);
+
+
+        for _column in 0..args.ncolumns {
+
             let mut hasher = Sha256::new();
             hasher.update(x0_bis.to_le_bytes());
             let hash_result = hasher.finalize();   
@@ -59,18 +72,34 @@ fn main() {
             bytes.copy_from_slice(&hash_result[..8]);
             let mut reduc = u64::from_le_bytes(bytes);
 
-            reduc = reduc.rotate_right(1);
+            
+            reduc = reduc.rotate_right(n_reduc);
             let x_end = reduc & ((1u64 << 38) - 1);  
-
+            x_end_bis.push(x_end);
         }
-        x_end_list.push(x_end);
         
+        // Store the last value of the chain (x_end)
+        let x_end = x_end_bis.last().unwrap();
+        x_end_list.push(*x_end);
+        x_end_bis.clear();
     }
-    println!("Start = {}, End = {}", x0_list.last().unwrap() , x_end_list.last().unwrap());
+    
+    // Create the directory if it does not exist
+    if !args.path.exists() {
+        std::fs::create_dir_all(&args.path).expect("Failed to create directory for tables");
+    }
 
+    // Write the tables to files
+    for nreduc_index in 0..n_reduc_list.len() {
+        let file_path = args.path.join(format!("{}.txt", nreduc_index));
+        let mut file = File::create(&file_path).expect("Failed to create file for TMTO table");
+        
+        writeln!(file, "nchain: {}, ncolumns: {}, redu:{} ", args.nchains, args.ncolumns, n_reduc_list[nreduc_index]).expect("Failed to write header to TMTO table file");
+        for (x0, x_end) in x0_list.iter().zip(x_end_list.iter()) {
+            writeln!(file, "{}, {}", x0, x_end).expect("Failed to write to TMTO table file");
+        }
+    }
 
-    println!("Number of columns: {}", args.ncolumns);
-    println!("Path to tables: {}", args.path.display());
     
 
     println!("TMTO table generation completed successfully.");
