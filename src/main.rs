@@ -1,6 +1,7 @@
 use clap::Parser;
 use sha2::{Digest, Sha256};
 use std::path::{PathBuf};
+use std::sync::mpsc;
 use std::{env};
 use rand::{prelude::*};
 use std::fs::File;
@@ -41,12 +42,14 @@ fn default_table_path() -> PathBuf {
 fn main() {
     let args = Args::parse();
     let mut threads= Vec::new();
+    let (tx, rx) = mpsc::channel();
 
     for _ in 0..args.ntables as usize{
 
         // Thread for each table
-
         let args = args.clone();
+        let tx = tx.clone();
+
         let thread = std::thread::spawn(move || {
             // Init list
             let mut x0_list : Vec<u64> = Vec::new();
@@ -97,6 +100,7 @@ fn main() {
                 std::fs::create_dir_all(&args.path).expect("Failed to create directory for tables");
             }
 
+            // Create the file
             let file_path = args.path.join(format!("{}.txt", n_reduc));
             let mut file = File::create(&file_path).expect("Failed to create file for TMTO table");
             
@@ -108,10 +112,20 @@ fn main() {
             // Reset the lists for each table
             x0_list.clear();
             x_end_list.clear();
+
+             // Tx sends the number of the reduction
+            tx.send(n_reduc).expect("Failed to send message from thread");
         });
+
         threads.push(thread);
         }
-        
+
+    // Rx receives the number of the reduction      
+    for _ in 0..args.ntables {
+        let n_reduc = rx.recv().expect("Failed to receive message");
+        println!("Table {} generated", n_reduc);
+    }
+
     // Wait for all threads to finish
     for thread in threads {
         thread.join().expect("Thread didn't finish");
