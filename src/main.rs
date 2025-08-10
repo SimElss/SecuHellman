@@ -44,7 +44,7 @@ fn main() {
     let mut threads= Vec::new();
     let (tx, rx) = mpsc::channel();
 
-    for _ in 0..args.ntables as usize{
+    for n_reduc in 1..=args.ntables as u32 {
 
         // Thread for each table
         let args = args.clone();
@@ -55,72 +55,89 @@ fn main() {
             let mut x0_list : Vec<u64> = Vec::new();
             let mut x_end_bis : Vec<u64> = Vec::new();
             let mut x_end_list : Vec<u64> = Vec::new();
-            
+
             // Init random number generator
             let mut rng = rand::rng();
             let x0 = rng.random_range(0..MAX_DOMAIN);
 
-            // Random generator for the N Reduc
-            let mut rng_reduc = rand::rng();
-            let n_reduc: u32 = rng_reduc.random_range(1..=255);
-        
             //Hellman Table algo
             for chain in 0..args.nchains {
-
                 //Store x0
-                let mut x0_bis = (x0 + chain) % MAX_DOMAIN; 
+                let mut x0_bis = (x0 + chain) % MAX_DOMAIN;
                 x0_list.push(x0_bis);
 
                 for _column in 0..args.ncolumns {
                     // Hash the current x0_bis
                     let mut hasher = Sha256::new();
                     hasher.update(x0_bis.to_le_bytes());
-                    let hash_result = hasher.finalize();   
+                    let hash_result = hasher.finalize();
 
-                    let mut bytes = [0u8; 8];
-                    bytes.copy_from_slice(&hash_result[..8]);
-                    let mut reduc = u64::from_le_bytes(bytes);
+                    //Split into 4 blocks
+                    let mut blocks = [
+                        u64::from_le_bytes(hash_result[0..8].try_into().unwrap()),
+                        u64::from_le_bytes(hash_result[8..16].try_into().unwrap()),
+                        u64::from_le_bytes(hash_result[16..24].try_into().unwrap()),
+                        u64::from_le_bytes(hash_result[24..32].try_into().unwrap()),
+                    ];
 
-                    // Reduction function
-                    reduc = reduc.rotate_right(n_reduc);
-                    let x_end = reduc & ((1u64 << 38) - 1);  
+                    //Block rotation
+                    let blockrotate = (n_reduc / 64) as usize;
+                    let bitrotate = n_reduc % 64;
+
+                    let mut rot = [0u64; 4];
+                    for i in 0..4 {
+                        rot[i] = blocks[(i + blockrotate) % 4];
+                    }
+
+                    // Bit rotation inside blocks
+                    let mut new_rot = [0u64; 4];
+                    for i in 0..4 {
+                        let next = (i + 1) % 4;
+                        new_rot[i] = rot[i].rotate_right(bitrotate) | rot[next].wrapping_shl(64 - bitrotate);
+                    }
+                    rot = new_rot;
+
+                    // Extract 38 MSB
+                    let x_end = (rot[3] >> 26) % MAX_DOMAIN ;
+                    
                     x0_bis = x_end;
 
                     x_end_bis.push(x_end);
                 }
-                
+
                 // Store the last value of the chain (x_end)
                 let x_end = x_end_bis.last().unwrap();
                 x_end_list.push(*x_end);
                 x_end_bis.clear();
             }
-            
-            // Create the directory
+
+            //Create the directory
             if !args.path.exists() {
-                std::fs::create_dir_all(&args.path).expect("Failed to create directory for tables");
+                std::fs::create_dir_all(&args.path).expect("Failed to create directory");
             }
 
             // Create the file
             let file_path = args.path.join(format!("{}.txt", n_reduc));
-            let mut file = File::create(&file_path).expect("Failed to create file for TMTO table");
-            
-            writeln!(file, "nchain: {}, ncolumns: {}, redu:{} ", args.nchains, args.ncolumns, n_reduc).expect("Failed to write header to TMTO table file");
+            let mut file = File::create(&file_path).expect("Failed to create file");
+
+            writeln!(file,"nchain: {}, ncolumns: {}, redu:{} ", args.nchains, args.ncolumns, n_reduc).expect("Failed to write header to TMTO table file");
+
             for (x0, x_end) in x0_list.iter().zip(x_end_list.iter()) {
                 writeln!(file, "{}, {}", x0, x_end).expect("Failed to write to TMTO table file");
             }
-            
+
             // Reset the lists for each table
             x0_list.clear();
             x_end_list.clear();
 
-             // Tx sends the number of the reduction
+            // Send table number
             tx.send(n_reduc).expect("Failed to send message from thread");
         });
 
         threads.push(thread);
-        }
+    }
 
-    // Rx receives the number of the reduction      
+    //Rx receives the number of the reduction      
     for _ in 0..args.ntables {
         let n_reduc = rx.recv().expect("Failed to receive message");
         println!("Table {} generated", n_reduc);
@@ -130,7 +147,5 @@ fn main() {
     for thread in threads {
         thread.join().expect("Thread didn't finish");
     }
-
-    println!("TMTO table generation completed successfully.");
 
 }
